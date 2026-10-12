@@ -1,0 +1,44 @@
+I built the RAG stack as a SAM project covering both flows, but I haven’t deployed it. I only checked that the Python compiles and that the chunker splits text sensibly. Expect to fix a few things on the first sam deploy.
+
+Ingestion (S3 → Lambda → Bedrock → OpenSearch)
+
+Uploading a .txt, .md or .pdf file to S3 triggers the ingest Lambda.
+It splits the text into paragraph-aware chunks of about 1,200 characters with 200 characters of overlap.
+Each chunk is embedded with Titan Text Embeddings V2 (1024 dimensions) and stored in an OpenSearch kNN index.
+S3 user metadata (for example department=hr) is stored with each chunk so you can filter on it later.
+Re-uploading a file replaces its old chunks, and deleting a file removes them.
+
+Query (API Gateway → Lambda → OpenSearch → Bedrock)
+
+POST /query takes a question, an optional top_k, and optional metadata filters.
+The Lambda embeds the question and retrieves the closest chunks, applying the filters.
+If nothing scores above MIN_SCORE, it returns “no relevant information” without calling the LLM.
+Otherwise it asks the Bedrock model, through the Converse API, to answer only from the retrieved context and cite sources as [1], [2].
+An optional Bedrock Guardrail can be applied to generation.
+The response contains the answer plus the sources and their scores.
+
+Infrastructure in template.yaml:
+
+The S3 bucket is encrypted, versioned and not public.
+The OpenSearch domain is encrypted and accessible only via IAM-signed requests.
+API Gateway uses an API key with throttling.
+Each Lambda has its own least-privilege role.
+CloudWatch has 30-day log retention, X-Ray tracing, and alarms for Lambda errors and API 5XX responses.
+CloudTrail logs management events and S3 object-level events on the documents bucket.
+
+Check before deploying:
+
+Enable the Titan embedding model and your Claude model in the Bedrock console for your region.
+The default GenerationModelId is a guess from memory, so confirm it exists in your region and override it if not.
+I set MIN_SCORE to 0.5 as a starting point; tune it on your own documents.
+
+The domain is a single-node, public-endpoint dev setup. The README lists what to harden before production: VPC, multi-AZ, Cognito or WAF instead of the API key, SQS in front of ingestion, and tighter Bedrock IAM scoping. It also covers extensions such as reranking, hybrid search, evaluation, and Bedrock Knowledge Bases as a managed alternative.
+
+Files are in aws-rag:
+
+README.md
+template.yaml
+ingest/app.py
+ingest/requirements.txt
+query/app.py
+query/requirements.txt
